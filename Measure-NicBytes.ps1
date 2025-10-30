@@ -1,4 +1,4 @@
-# Measures network adapter traffic with optional background activity subtraction. 
+# This PowerShell 5.1 script measures network adapter traffic with optional background activity subtraction. 
 # Captures baseline, monitors peaks during activity, displays bytes transferred and rates (avg/peak) per adapter.
 # Supports repeated measurements.
 $BYTE_COLUMN_WIDTH = 7
@@ -39,6 +39,14 @@ function Add-TableColumn {
     $Object | Add-Member -NotePropertyName $headerName -NotePropertyValue $paddedValue
 }
 
+function Test-KeyAvailable {
+    try {
+        return [Console]::KeyAvailable
+    } catch {
+        return $false
+    }
+}
+
 function Get-AdapterStats {
     $stats = @{}
     Get-NetAdapterStatistics | ForEach-Object {
@@ -63,6 +71,18 @@ function Wait-ForEnterWithPeakMonitoring {
     $lastElapsedSecond = -1
     $lastStats = $StartStats
     $lastTime = $StartTime
+    $keyCheckingAvailable = Test-KeyAvailable
+    
+    if (-not $keyCheckingAvailable -and $MaxDurationSeconds -le 0) {
+        Read-Host
+        $endTime = Get-Date
+        $endStats = Get-AdapterStats
+        
+        return @{
+            PeakRxRates = @{}
+            PeakTxRates = @{}
+        }
+    }
     
     do {
         Start-Sleep -Milliseconds 100
@@ -83,9 +103,12 @@ function Wait-ForEnterWithPeakMonitoring {
             }
         }
         
-        if ([Console]::KeyAvailable) {
-            [Console]::ReadKey($true) | Out-Null
-            break
+        if ($keyCheckingAvailable -and (Test-KeyAvailable)) {
+            try {
+                [Console]::ReadKey($true) | Out-Null
+                break
+            } catch {
+            }
         }
         
         $currentStats = Get-AdapterStats
