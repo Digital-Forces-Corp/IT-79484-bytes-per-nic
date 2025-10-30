@@ -1,10 +1,8 @@
-# Captures baseline adapter byte counters, waits for Enter, then prints per-NIC deltas.
-
-# Column width constants
+# Measures network adapter traffic with optional background activity subtraction. 
+# Captures baseline, monitors peaks during activity, displays bytes transferred and rates (avg/peak) per adapter.
+# Supports repeated measurements.
 $BYTE_COLUMN_WIDTH = 7
 $RATE_COLUMN_WIDTH = 10
-
-# Background test constants
 $DEFAULT_BACKGROUND_TEST_SECONDS = 5
 
 function Format-ColumnHeader {
@@ -98,6 +96,14 @@ function Wait-ForEnterWithPeakMonitoring {
                 if ($lastStats.ContainsKey($name)) {
                     $rxDelta = $currentStats[$name].ReceivedBytes - $lastStats[$name].ReceivedBytes
                     $txDelta = $currentStats[$name].SentBytes - $lastStats[$name].SentBytes
+                    
+                    if ($rxDelta -lt 0) {
+                        throw "Counter rollover detected on adapter '$name': RxBytes decreased from $($lastStats[$name].ReceivedBytes) to $($currentStats[$name].ReceivedBytes) (delta: $rxDelta)"
+                    }
+                    if ($txDelta -lt 0) {
+                        throw "Counter rollover detected on adapter '$name': TxBytes decreased from $($lastStats[$name].SentBytes) to $($currentStats[$name].SentBytes) (delta: $txDelta)"
+                    }
+                    
                     $rxRate = $rxDelta / $intervalDelta
                     $txRate = $txDelta / $intervalDelta
                     
@@ -139,6 +145,13 @@ function New-MeasurementReport {
         
         $rxDelta = [int64]($end.ReceivedBytes - $start.ReceivedBytes)
         $txDelta = [int64]($end.SentBytes - $start.SentBytes)
+        
+        if ($rxDelta -lt 0) {
+            throw "Counter rollover detected on adapter '$name': RxBytes decreased from $($start.ReceivedBytes) to $($end.ReceivedBytes) (delta: $rxDelta)"
+        }
+        if ($txDelta -lt 0) {
+            throw "Counter rollover detected on adapter '$name': TxBytes decreased from $($start.SentBytes) to $($end.SentBytes) (delta: $txDelta)"
+        }
         
         $avgRxRate = if ($DurationSeconds -gt 0) { $rxDelta / $DurationSeconds } else { [double]::NaN }
         $avgTxRate = if ($DurationSeconds -gt 0) { $txDelta / $DurationSeconds } else { [double]::NaN }
@@ -311,21 +324,19 @@ function Remove-BackgroundActivity {
         $currentAdapter | Add-Member -NotePropertyName BgRxRate -NotePropertyValue $bgAvgRxRate -Force
         $currentAdapter | Add-Member -NotePropertyName BgTxRate -NotePropertyValue $bgAvgTxRate -Force
         
-        $currentAdapter.AvgRxRate = if ([double]::IsNaN($currentAdapter.AvgRxRate)) { [double]::NaN } else { [math]::Max(0, $currentAdapter.AvgRxRate - $bgAvgRxRate) }
-        $currentAdapter.AvgTxRate = if ([double]::IsNaN($currentAdapter.AvgTxRate)) { [double]::NaN } else { [math]::Max(0, $currentAdapter.AvgTxRate - $bgAvgTxRate) }
-        $currentAdapter.PeakRxRate = if ([double]::IsNaN($currentAdapter.PeakRxRate)) { [double]::NaN } else { [math]::Max(0, $currentAdapter.PeakRxRate - $bgAvgRxRate) }
-        $currentAdapter.PeakTxRate = if ([double]::IsNaN($currentAdapter.PeakTxRate)) { [double]::NaN } else { [math]::Max(0, $currentAdapter.PeakTxRate - $bgAvgTxRate) }
+        $currentAdapter.AvgRxRate = if ([double]::IsNaN($currentAdapter.AvgRxRate)) { [double]::NaN } else { $currentAdapter.AvgRxRate - $bgAvgRxRate }
+        $currentAdapter.AvgTxRate = if ([double]::IsNaN($currentAdapter.AvgTxRate)) { [double]::NaN } else { $currentAdapter.AvgTxRate - $bgAvgTxRate }
+        $currentAdapter.PeakRxRate = if ([double]::IsNaN($currentAdapter.PeakRxRate)) { [double]::NaN } else { $currentAdapter.PeakRxRate - $bgAvgRxRate }
+        $currentAdapter.PeakTxRate = if ([double]::IsNaN($currentAdapter.PeakTxRate)) { [double]::NaN } else { $currentAdapter.PeakTxRate - $bgAvgTxRate }
         $currentAdapter
     }
 }
 
-# Build adapter name-to-description map
 $adapterDescriptions = @{}
 Get-NetAdapter | ForEach-Object {
     $adapterDescriptions[$_.Name] = $_.InterfaceDescription
 }
 
-# Ask for background test duration
 $backgroundDuration = $null
 do {
     Write-Host "How long do you want to run to determine background network load? (Enter seconds, or 0 to skip) [$DEFAULT_BACKGROUND_TEST_SECONDS]: " -NoNewline
@@ -345,7 +356,6 @@ do {
     }
 } while ($true)
 
-# Capture background activity if requested
 $subtractBackground = $false
 if ($null -ne $backgroundDuration) {
     $bgMeasurement = Invoke-NetworkMeasurement `
@@ -356,7 +366,6 @@ if ($null -ne $backgroundDuration) {
 
     Show-NetworkTable -Report $bgMeasurement.Report -StartTime $bgMeasurement.StartTime -EndTime $bgMeasurement.EndTime -BackgroundSubtracted $false
 
-    # Ask user if they want to subtract background
     Write-Host "Do you want to subtract background activity from further statistics? (Y/[N]): " -NoNewline
     $response = Read-Host
     if ($response -match '^[Yy]') {
