@@ -75,10 +75,9 @@ function Wait-ForEnterWithPeakMonitoring {
     
     if (-not $keyCheckingAvailable -and $MaxDurationSeconds -le 0) {
         Read-Host
-        $endTime = Get-Date
-        $endStats = Get-AdapterStats
-        
         return @{
+            EndTime     = Get-Date
+            EndStats    = Get-AdapterStats
             PeakRxRates = @{}
             PeakTxRates = @{}
         }
@@ -145,6 +144,8 @@ function Wait-ForEnterWithPeakMonitoring {
     } while ($true)
     
     return @{
+        EndTime     = $currentTime
+        EndStats    = $currentStats
         PeakRxRates = $peakRxRates
         PeakTxRates = $peakTxRates
     }
@@ -316,8 +317,8 @@ function Invoke-NetworkMeasurement {
 
     $peakData = Wait-ForEnterWithPeakMonitoring -StartStats $startStats -StartTime $startTime -MaxDurationSeconds $MaxDurationSeconds
 
-    $endTime = Get-Date
-    $endStats = Get-AdapterStats
+    $endTime = $peakData.EndTime
+    $endStats = $peakData.EndStats
 
     $durationSeconds = ($endTime - $startTime).TotalSeconds
 
